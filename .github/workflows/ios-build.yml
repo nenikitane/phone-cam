@@ -1,0 +1,148 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Build profile'
+        required: true
+        default: 'preview'
+        type: choice
+        options:
+          - development
+          - preview
+          - production
+
+jobs:
+  build:
+    name: Build iOS (${{ github.event.inputs.profile || 'preview' }})
+    runs-on: macos-14
+    timeout-minutes: 60
+    
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # For ad-hoc/provisioning profile
+      IOS_DISTRIBUTION_CERT: ${{ secrets.IOS_DISTRIBUTION_CERT }}
+      IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/phone/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./apps/phone
+        run: npm ci
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Configure EAS
+        working-directory: ./apps/phone
+        run: |
+          eas whoami || eas login --token $EXPO_TOKEN
+          eas project:info || eas init --id $EAS_PROJECT_ID --non-interactive
+
+      - name: Build iOS
+        working-directory: ./apps/phone
+        run: |
+          eas build --platform ios \
+            --profile ${{ github.event.inputs.profile || 'preview' }} \
+            --non-interactive \
+            --no-wait
+
+      - name: Wait for build
+        working-directory: ./apps/phone
+        run: |
+          eas build:list --platform=ios --limit=1 --status=finished --json > build.json
+          BUILD_URL=$(cat build.json | jq -r '.[0].artifacts.buildUrl // empty')
+          if [ -z "$BUILD_URL" ]; then
+            echo "Build failed or no artifact"
+            exit 1
+          fi
+          echo "Build URL: $BUILD_URL"
+          echo "BUILD_URL=$BUILD_URL" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonecam-ios-${{ github.event.inputs.profile || 'preview' }}
+          path: |
+            apps/phone/*.ipa
+            apps/phone/*.app
+          retention-days: 30
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            apps/phone/*.ipa
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Separate job for development builds (simulator)
+  build-simulator:
+    name: Build iOS Simulator
+    runs-on: macos-14
+    timeout-minutes: 45
+    if: github.event_name == 'pull_request' || github.event.inputs.profile == 'development'
+    
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/phone/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./apps/phone
+        run: npm ci
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Configure EAS
+        working-directory: ./apps/phone
+        run: |
+          eas whoami || eas login --token $EXPO_TOKEN
+
+      - name: Build for Simulator
+        working-directory: ./apps/phone
+        run: |
+          eas build --platform ios \
+            --profile development \
+            --non-interactive \
+            --no-wait
+
+      - name: Wait and upload simulator build
+        working-directory: ./apps/phone
+        run: |
+          eas build:list --platform=ios --limit=1 --status=finished --json > build.json
+          BUILD_URL=$(cat build.json | jq -r '.[0].artifacts.buildUrl // empty')
+          if [ -n "$BUILD_URL" ]; then
+            echo "Simulator build ready: $BUILD_URL"
+          fi

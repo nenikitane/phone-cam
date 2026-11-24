@@ -1,0 +1,24 @@
+{
+  "name": "phone-cam",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:phone": "cd apps/phone && npx expo start",
+    "dev:desktop": "cd apps/desktop && npm run dev",
+    "build:ios": "cd apps/phone && eas build --platform ios --profile preview",
+    "build:android": "cd apps/phone && eas build --platform android --profile preview",
+    "build:desktop": "cd apps/desktop && npm run build",
+    "signaling": "cd packages/signaling-server && npm start"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
